@@ -115,18 +115,20 @@ composite = 0.5 * (BCE / BCE_FLOOR) + 0.5 * (mean_pixel_ADE / ADE_FLOOR)
 
 ## M2 Scores (Trajectory Improvements)
 
-| Metric | Value (M1) | Value (M2) | Delta |
-|---|---|---|---|
-| **Composite score** | **0.8311** | **0.8231** | **-0.0080** |
-| Intent term (BCE/floor) | 0.856 | 0.856 | 0.000 |
-| Trajectory term (ADE/floor) | 0.806 | 0.790 | -0.016 |
-| Raw mean ADE | 40.2 px | 39.4 px | -0.8 px |
+| Metric | Value (M1) | Value (M2) | Value (M3) | Delta (Total) |
+|---|---|---|---|---|
+| **Composite score** | **0.8311** | **0.8231** | **0.8222** | **-0.0089** |
+| Intent term (BCE/floor) | 0.856 | 0.856 | 0.854 | -0.002 |
+| Trajectory term (ADE/floor) | 0.806 | 0.790 | 0.790 | -0.016 |
+| Raw mean ADE | 40.2 px | 39.4 px | 39.4 px | -0.8 px |
 
-**M2 Changes Implemented:**
-- Swapped constant velocity for Exponential Moving Average (EMA) smoothed velocity (alpha=0.3).
-- Added EMA-smoothed acceleration-aware projection to better model stopping/starting behavior.
-- Added adaptive bounding box sizing (tracking EMA of width/height velocities) rather than fixed projection sizes.
-- *Discarded:* Ego-motion compensation. Attempts to use ego-yaw and an estimated focal length degraded performance significantly (from 39px ADE to 300+px ADE), likely due to incomplete intrinsics or sign ambiguity.
+**M3 Changes Implemented:**
+- Expanded feature set (20 -> 25 features) including:
+    - Short-term vs Long-term velocity comparison.
+    - Explicit horizontal acceleration calculation.
+    - Absolute speed magnitude features.
+    - Binary "stopping" signal (speed below 1px/frame).
+- Retrained XGBoost with tuned hyperparameters (`lr=0.03`, `n_estimators=400`) optimized for BCE.
 
 ---
 
