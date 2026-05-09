@@ -113,46 +113,31 @@ composite = 0.5 * (BCE / BCE_FLOOR) + 0.5 * (mean_pixel_ADE / ADE_FLOOR)
 
 ---
 
-## Baseline Scores (M1 — dev.parquet, 5,000 sample)
+## M2 Scores (Trajectory Improvements)
 
-| Metric | Value |
-|---|---|
-| **Composite score** | **0.8311** |
-| Intent term (BCE/floor) | 0.856 |
-| Trajectory term (ADE/floor) | 0.806 |
-| Raw BCE | 0.2129 |
-| Raw mean ADE | 40.2 px |
-| Tests passing | 8/8 ✅ |
+| Metric | Value (M1) | Value (M2) | Delta |
+|---|---|---|---|
+| **Composite score** | **0.8311** | **0.8231** | **-0.0080** |
+| Intent term (BCE/floor) | 0.856 | 0.856 | 0.000 |
+| Trajectory term (ADE/floor) | 0.806 | 0.790 | -0.016 |
+| Raw mean ADE | 40.2 px | 39.4 px | -0.8 px |
 
-**Per-horizon ADE (measured on full dev set):**
-
-| Horizon | Const-vel ADE | Zero-vel ADE |
-|---|---|---|
-| +0.5 s | 10.1 px | 23.0 px |
-| +1.0 s | 23.6 px | 44.8 px |
-| +1.5 s | 47.3 px | 74.6 px |
-| +2.0 s | 77.3 px | 107.6 px |
-| **Mean** | **39.6 px** | **62.5 px** |
-
-Constant-velocity clearly beats zero-velocity, but errors grow rapidly with horizon — consistent with pedestrians **changing speed and direction**, which constant-velocity cannot model.
-
-**Velocity statistics (@15 Hz):**
-- `vx`: mean ≈ 0, std 4.65 px/frame (high lateral noise)
-- `vy`: mean 0.19, std 1.32 px/frame (smaller vertical motion)
+**M2 Changes Implemented:**
+- Swapped constant velocity for Exponential Moving Average (EMA) smoothed velocity (alpha=0.3).
+- Added EMA-smoothed acceleration-aware projection to better model stopping/starting behavior.
+- Added adaptive bounding box sizing (tracking EMA of width/height velocities) rather than fixed projection sizes.
+- *Discarded:* Ego-motion compensation. Attempts to use ego-yaw and an estimated focal length degraded performance significantly (from 39px ADE to 300+px ADE), likely due to incomplete intrinsics or sign ambiguity.
 
 ---
 
-## Identified Weaknesses
+## Identified Weaknesses (Updated post-M2)
 
-### Trajectory (higher ROI — worth ~50% of score)
+### Trajectory (addressed in M2)
 
-1. **Constant velocity ignores acceleration.** Pedestrians decelerate before crossing, accelerate mid-cross. A simple linear velocity extrapolation accumulates error rapidly at 1.5–2.0 s.
-2. **No smoothing.** Raw bbox detections contain jitter (bbox std ~4.65 px/frame laterally). Velocity estimation from noisy observations amplifies error.
-3. **Fixed bounding box size.** At 2.0 s, the pedestrian may have moved significantly; projecting a fixed-size box is wrong whenever aspect changes (e.g. turning body).
-4. **No ego-motion compensation.** When the camera is on a moving vehicle with yaw, the pedestrian's apparent pixel motion is contaminated by camera motion. Ego speed/yaw are available but not used for trajectory.
-5. **Only 4 frames used for velocity.** The full 16-frame history is available — longer windows could improve velocity estimation stability.
+- The constant-velocity baseline was replaced with EMA+Acceleration.
+- Further trajectory gains might require sequence models (M4) or external tracking state.
 
-### Intent (also worth ~50% of score)
+### Intent (higher ROI now — worth ~50% of score)
 
 6. **Class imbalance not handled.** 7.9% positives, but no `scale_pos_weight` or SMOTE. XGBoost will under-predict the minority class.
 7. **No acceleration feature.** Change in velocity is a direct signal for crossing intent (pedestrians slow down, stop, then cross).

@@ -98,17 +98,49 @@ def _constant_velocity_trajectory(req: dict) -> dict[str, list[float]]:
     hist = _as_2d(req["bbox_history"])  # (16, 4)
     cx = (hist[:, 0] + hist[:, 2]) * 0.5
     cy = (hist[:, 1] + hist[:, 3]) * 0.5
-    w_last = hist[-1, 2] - hist[-1, 0]
-    h_last = hist[-1, 3] - hist[-1, 1]
-    # mean per-frame velocity over last 4 intervals
-    vx = float(np.diff(cx[-5:]).mean())
-    vy = float(np.diff(cy[-5:]).mean())
+    w = hist[:, 2] - hist[:, 0]
+    h = hist[:, 3] - hist[:, 1]
+    
+    # EMA smoothing of velocity, acceleration, and size changes
+    vx_raw = np.diff(cx)
+    vy_raw = np.diff(cy)
+    vw_raw = np.diff(w)
+    vh_raw = np.diff(h)
+    
+    alpha_v = 0.3
+    alpha_a = 0.1
+    vx, vy = vx_raw[0], vy_raw[0]
+    vw, vh = vw_raw[0], vh_raw[0]
+    ax, ay = 0.0, 0.0
+    
+    for i in range(1, len(vx_raw)):
+        prev_vx, prev_vy = vx, vy
+        vx = alpha_v * vx_raw[i] + (1 - alpha_v) * vx
+        vy = alpha_v * vy_raw[i] + (1 - alpha_v) * vy
+        vw = alpha_v * vw_raw[i] + (1 - alpha_v) * vw
+        vh = alpha_v * vh_raw[i] + (1 - alpha_v) * vh
+        
+        cur_ax = vx - prev_vx
+        cur_ay = vy - prev_vy
+        ax = alpha_a * cur_ax + (1 - alpha_a) * ax
+        ay = alpha_a * cur_ay + (1 - alpha_a) * ay
+        
     cur_cx, cur_cy = float(cx[-1]), float(cy[-1])
+    cur_w, cur_h = float(w[-1]), float(h[-1])
+    vx, vy, vw, vh = float(vx), float(vy), float(vw), float(vh)
+    ax, ay = float(ax), float(ay)
 
     out: dict[str, list[float]] = {}
-    for h, key in zip(HORIZONS_FRAMES, HORIZON_KEYS):
-        nx, ny = cur_cx + vx * h, cur_cy + vy * h
-        out[key] = [nx - w_last / 2, ny - h_last / 2, nx + w_last / 2, ny + h_last / 2]
+    for h_frames, key in zip(HORIZONS_FRAMES, HORIZON_KEYS):
+        # Dampen acceleration over time
+        nx = cur_cx + vx * h_frames + 0.5 * ax * (h_frames ** 2) * 0.5
+        ny = cur_cy + vy * h_frames + 0.5 * ay * (h_frames ** 2) * 0.5
+        
+        # Adaptive size with floor
+        nw = max(10.0, cur_w + vw * h_frames)
+        nh = max(10.0, cur_h + vh * h_frames)
+        
+        out[key] = [nx - nw / 2, ny - nh / 2, nx + nw / 2, ny + nh / 2]
     return out
 
 
