@@ -136,7 +136,23 @@ composite = 0.5 * (BCE / BCE_FLOOR) + 0.5 * (mean_pixel_ADE / ADE_FLOOR)
 
 ---
 
-## Identified Weaknesses (Updated post-M2)
+## M4 Sequence Model Experiment (Aborted)
+
+As an exploratory milestone, we attempted to replace the heuristic trajectory projection with a lightweight **GRU (Gated Recurrent Unit)** sequence model.
+
+**Design:**
+- **Input:** 16-frame sequence of normalized box center displacements `(cx_t - cx_last, cy_t - cy_last)`.
+- **Architecture:** PyTorch GRU (hidden size 16) → Linear layer (8 outputs).
+- **Output:** Residuals relative to the M2 EMA heuristic projection at the 4 target horizons.
+- **Inference:** A pure NumPy forward pass was written in `predict.py` to maintain a zero-dependency Docker footprint.
+
+**Results:**
+- **ADE:** Worsened from 38.73 px (M3 full dev) to **43.10 px**.
+- **Composite Score:** Worsened from 0.8245 to **0.8333** (full dev set).
+- Despite reaching a very low training MSE, the GRU failed to generalize to the 2-second horizon better than the tuned EMA kinematics model.
+
+**Conclusion:**
+The sequence model was **reverted**. The `predict.py` logic remains purely heuristic for trajectories. This confirms that for short, noisy sequences without strong contextual map priors, smoothed kinematics outperform unconstrained black-box models.
 
 ### Trajectory (addressed in M2)
 
