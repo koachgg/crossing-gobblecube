@@ -1,0 +1,211 @@
+# Architecture Notes — M1 Exploration
+
+## Repository Overview
+
+Pedestrian crossing intent + trajectory prediction challenge.
+
+- Input: 16 frames of history at 15 Hz (~1.07 s) per pedestrian.
+- Output: P(crossing within 2s) + 4 future bounding boxes at 0.5/1.0/1.5/2.0 s.
+- Data: video-disjoint train/dev split. No video or pedestrian overlaps between splits.
+- Frame resolution: always 1920 × 1080 px.
+
+### File Map
+
+| File | Role |
+|---|---|
+| `predict.py` | Submission entry point. `predict(request) -> dict`. Do NOT change signature. |
+| `baseline.py` | Training script. XGBoost on 20 hand-crafted features. |
+| `grade.py` | Local grader + Docker grader mode. Computes composite score. |
+| `data/schema.md` | Full column definitions and dataset notes. |
+| `data/train.parquet` | 28,680 prediction windows, 1,482 unique pedestrians. |
+| `data/dev.parquet` | 6,065 prediction windows, 282 unique pedestrians. |
+| `model.pkl` | Serialized dict: `{"intent": XGBClassifier}` |
+| `Dockerfile` | Python 3.11-slim. Target image size ≤ 2.5 GB (baseline ~2.02 GB). |
+| `tests/test_predict.py` | 8 contract tests — shape, not quality. Must all pass. |
+
+---
+
+## Current Baseline Pipeline
+
+### Training (baseline.py)
+
+1. Load `train.parquet` + `dev.parquet`.
+2. Featurize each row via `_engineered_features()`.
+3. Train `XGBClassifier(n_estimators=300, max_depth=5, lr=0.05)` on intent label.
+4. Serialize model as `{"intent": clf}` → `model.pkl`.
+
+### Inference (predict.py)
+
+Two independent components:
+
+**Intent:**
+- Load XGBClassifier from `model.pkl`.
+- Run `_engineered_features()` → `predict_proba()`.
+- Clip NaN/inf → return `intent` probability.
+
+**Trajectory:**
+- Pure constant-velocity extrapolation.
+- Average velocity over last 4 intervals (`vx = diff(cx[-5:]).mean()`).
+- Project forward at each horizon (`nx = cx[-1] + vx * h_frames`).
+- Bounding box size held fixed at last observed size.
+- **No model involved. Entirely heuristic.**
+
+---
+
+## Feature Engineering (20 features)
+
+| # | Feature | Notes |
+|---|---|---|
+| 1-2 | `cx[-1]/fw`, `cy[-1]/fh` | Current normalized centre |
+| 3-4 | `w[-1]/fw`, `h[-1]/fh` | Current normalized size |
+| 5-6 | `vx[-4:].mean()/fw`, `vy[-4:].mean()/fh` | Short-window mean velocity |
+| 7-8 | `vx.std()/fw`, `vy.std()/fh` | Velocity variance (jitter) |
+| 9 | `(h/w).mean()` | Average aspect ratio (tallness) |
+| 10 | `ego_available` | Bool flag |
+| 11-13 | `ego_s.mean()`, `ego_s[-1]`, `ego_s.max()` | Ego speed stats |
+| 14-16 | `ego_y.mean()`, `ego_y[-1]`, `abs(ego_y).max()` | Ego yaw stats |
+| 17-18 | `time_of_day == daytime`, `nighttime` | One-hot |
+| 19-20 | `weather == rain`, `weather == snow` | One-hot |
+
+**Missing from features:**
+- Acceleration (velocity change rate)
+- Heading direction
+- Pedestrian stopping / hesitation signals
+- Trajectory curvature
+- Absolute x-position relative to image thirds (proxy for curb proximity)
+- `location` field completely unused
+- Weather categories `clear` / `cloudy` not encoded
+- Full velocity history (only last 4 frames used for mean; history ignored)
+
+---
+
+## Dataset Characteristics
+
+| Property | Value |
+|---|---|
+| Train size | 28,680 rows |
+| Dev size | 6,065 rows |
+| Train positive rate | 7.93% |
+| Dev positive rate | 9.08% |
+| Class imbalance | ~12:1 negative:positive |
+| ego_available=True | 92.8% of train |
+| time_of_day populated | <8% of rows (most are empty string) |
+| weather populated | <8% of rows |
+| location populated | <8% of rows |
+
+> **Implication:** Context metadata (time, weather, location) is sparse and unreliable.
+> The model must primarily rely on bbox motion signals.
+
+---
+
+## Scoring
+
+```
+composite = 0.5 * (BCE / BCE_FLOOR) + 0.5 * (mean_pixel_ADE / ADE_FLOOR)
+```
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `BCE_FLOOR` | 0.2488 | Entropy of class prior on Eval set |
+| `ADE_FLOOR` | 49.80 px | Zero-velocity ADE on Eval set |
+
+**Lower composite = better.** A zero-effort submission scores ~1.0.
+
+---
+
+## Baseline Scores (M1 — dev.parquet, 5,000 sample)
+
+| Metric | Value |
+|---|---|
+| **Composite score** | **0.8311** |
+| Intent term (BCE/floor) | 0.856 |
+| Trajectory term (ADE/floor) | 0.806 |
+| Raw BCE | 0.2129 |
+| Raw mean ADE | 40.2 px |
+| Tests passing | 8/8 ✅ |
+
+**Per-horizon ADE (measured on full dev set):**
+
+| Horizon | Const-vel ADE | Zero-vel ADE |
+|---|---|---|
+| +0.5 s | 10.1 px | 23.0 px |
+| +1.0 s | 23.6 px | 44.8 px |
+| +1.5 s | 47.3 px | 74.6 px |
+| +2.0 s | 77.3 px | 107.6 px |
+| **Mean** | **39.6 px** | **62.5 px** |
+
+Constant-velocity clearly beats zero-velocity, but errors grow rapidly with horizon — consistent with pedestrians **changing speed and direction**, which constant-velocity cannot model.
+
+**Velocity statistics (@15 Hz):**
+- `vx`: mean ≈ 0, std 4.65 px/frame (high lateral noise)
+- `vy`: mean 0.19, std 1.32 px/frame (smaller vertical motion)
+
+---
+
+## Identified Weaknesses
+
+### Trajectory (higher ROI — worth ~50% of score)
+
+1. **Constant velocity ignores acceleration.** Pedestrians decelerate before crossing, accelerate mid-cross. A simple linear velocity extrapolation accumulates error rapidly at 1.5–2.0 s.
+2. **No smoothing.** Raw bbox detections contain jitter (bbox std ~4.65 px/frame laterally). Velocity estimation from noisy observations amplifies error.
+3. **Fixed bounding box size.** At 2.0 s, the pedestrian may have moved significantly; projecting a fixed-size box is wrong whenever aspect changes (e.g. turning body).
+4. **No ego-motion compensation.** When the camera is on a moving vehicle with yaw, the pedestrian's apparent pixel motion is contaminated by camera motion. Ego speed/yaw are available but not used for trajectory.
+5. **Only 4 frames used for velocity.** The full 16-frame history is available — longer windows could improve velocity estimation stability.
+
+### Intent (also worth ~50% of score)
+
+6. **Class imbalance not handled.** 7.9% positives, but no `scale_pos_weight` or SMOTE. XGBoost will under-predict the minority class.
+7. **No acceleration feature.** Change in velocity is a direct signal for crossing intent (pedestrians slow down, stop, then cross).
+8. **No stopping/hesitation signal.** A pedestrian with near-zero velocity variance who then starts moving is a strong crossing predictor.
+9. **`location` field completely ignored.** Though sparse, it could be one-hot encoded.
+10. **Weak temporal features.** Only mean + std of velocity used; no trend (is the pedestrian speeding up or slowing down?).
+11. **Full history unused for ego yaw.** Only mean/last/max used; trajectory curvature due to ego turning is not decomputed.
+12. **No calibration step.** XGBoost probabilities are known to be poorly calibrated; isotonic regression or Platt scaling could improve BCE.
+
+---
+
+## Improvement Roadmap (Prioritized)
+
+### M2 — Trajectory (expected −0.05 to −0.15 on traj_term)
+
+| Priority | Change | Rationale |
+|---|---|---|
+| 🔴 High | Velocity smoothing (e.g. exponential moving average or median over last 8 frames) | Reduces jitter accumulation at long horizons |
+| 🔴 High | Acceleration-aware projection (fit linear velocity trend, extrapolate with deceleration) | ADE at +1.5/2.0 s is worst — non-constant motion is the primary driver |
+| 🟡 Medium | Ego-motion subtraction (subtract camera-induced pixel shift using ego speed + yaw) | Improves velocity estimation when ego is moving |
+| 🟡 Medium | Adaptive box size (estimate size change rate from history) | Marginal but free |
+
+### M3 — Intent (expected −0.05 to −0.10 on intent_term)
+
+| Priority | Change | Rationale |
+|---|---|---|
+| 🔴 High | Add acceleration features (velocity trend slope, speed_change = vx[-1] - vx[-8]) | Strong crossing signal |
+| 🔴 High | Add stopping signal (near-zero velocity after motion) | Hesitation before crossing is common |
+| 🟡 Medium | `scale_pos_weight` in XGBoost (or set `class_weight`) | Fix imbalance recall for the positive class |
+| 🟡 Medium | Probability calibration (CalibratedClassifierCV / isotonic) | Directly improves BCE |
+| 🟢 Low | One-hot `location` + full weather categories | Sparse but adds signal for populated subsets |
+| 🟢 Low | Lateral position relative to frame thirds | Curb proximity proxy |
+
+### M4 — Optional Sequence Model (only if M2+M3 plateau)
+
+- Lightweight GRU over the 16-frame bbox sequence for trajectory.
+- Must stay CPU-friendly and fit within 4 GB / 4 CPU limits.
+- Risk: adds complexity; benefit uncertain given quality of current features.
+
+### M5 — Finalization
+
+- Docker validation.
+- README with experiment log and score history.
+- Dependency cleanup.
+- Reproducibility audit.
+
+---
+
+## Known Constraints
+
+- Offline inference (no external APIs at predict time)
+- CPU-friendly (≤4 CPUs, ≤4 GB RAM)
+- Dockerized submission (Python 3.11-slim, ≤2.5 GB image)
+- `predict(request: dict) -> dict` signature must not change
+- `model.pkl` must be included in image
+- All 8 contract tests must pass
