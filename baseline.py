@@ -67,15 +67,21 @@ def main() -> None:
 
     pos_ratio = float(y_train.mean())
 
-    print("\nTraining XGBClassifier (no class rebalancing — want calibrated probs)...")
+    print("\nTraining XGBClassifier (with class balancing)...")
     t0 = time.time()
+    # Calculate scale_pos_weight: sum(neg) / sum(pos)
+    neg_count = len(y_train) - y_train.sum()
+    pos_count = y_train.sum()
+    scale_weight = neg_count / pos_count
+
     clf = XGBClassifier(
-        n_estimators=300,
+        n_estimators=400,
         max_depth=5,
-        learning_rate=0.05,
+        learning_rate=0.03,
         tree_method="hist",
         n_jobs=-1,
         eval_metric="logloss",
+        random_state=42,
     )
     clf.fit(X_train, y_train, eval_set=[(X_dev, y_dev)], verbose=False)
     print(f"  {time.time() - t0:.1f}s")
@@ -85,7 +91,7 @@ def main() -> None:
     prior_ll = log_loss(y_dev, np.full_like(dev_probs, pos_ratio))
     print(f"\nDev log-loss:  {ll:.4f}  (class-prior baseline {prior_ll:.4f})")
 
-    print(f"\nSaving model → {MODEL_PATH}")
+    print(f"\nSaving model -> {MODEL_PATH}")
     with open(MODEL_PATH, "wb") as f:
         pickle.dump({"intent": clf}, f)
 

@@ -65,9 +65,24 @@ def _engineered_features(req: dict) -> np.ndarray:
     cy = (hist[:, 1] + hist[:, 3]) * 0.5
     w = hist[:, 2] - hist[:, 0]
     h = hist[:, 3] - hist[:, 1]
+    
     vx = np.diff(cx)
     vy = np.diff(cy)
-
+    
+    # New features: Acceleration and Speed Trends
+    # Short-term (last 4 frames) vs Long-term (last 12 frames)
+    vx_short = vx[-4:].mean()
+    vx_long = vx[-12:].mean()
+    accel_x = vx[-4:].mean() - vx[-8:-4].mean() if len(vx) >= 8 else 0.0
+    
+    # Speed (magnitude of velocity)
+    speed = np.sqrt(vx**2 + vy**2)
+    speed_last = speed[-1]
+    speed_mean = speed.mean()
+    
+    # Stopping signal: is the pedestrian currently "still"?
+    is_stopping = 1.0 if speed_last < 1.0 else 0.0 # 1px per frame threshold
+    
     ego_s = np.asarray(req["ego_speed_history"], dtype=np.float64)
     ego_y = np.asarray(req["ego_yaw_history"], dtype=np.float64)
 
@@ -78,14 +93,20 @@ def _engineered_features(req: dict) -> np.ndarray:
         cy[-1] / fh,
         w[-1] / fw,
         h[-1] / fh,
-        vx[-4:].mean() / fw,
+        vx_short / fw,
         vy[-4:].mean() / fh,
-        vx.std() / fw,                            # normalized per frame width
-        vy.std() / fh,                            # normalized per frame height
-        (h / (w + 1e-6)).mean(),                  # aspect ratio (tallness)
+        vx.std() / fw,
+        vy.std() / fh,
+        (h / (w + 1e-6)).mean(),
         float(req["ego_available"]),
         ego_s.mean(), ego_s[-1], ego_s.max(),
         ego_y.mean(), ego_y[-1], np.abs(ego_y).max(),
+        # New intent-focused features
+        vx_long / fw,
+        accel_x / fw,
+        speed_last / fw,
+        speed_mean / fw,
+        is_stopping,
         1.0 if req.get("time_of_day") == "daytime" else 0.0,
         1.0 if req.get("time_of_day") == "nighttime" else 0.0,
         1.0 if req.get("weather") == "rain" else 0.0,
