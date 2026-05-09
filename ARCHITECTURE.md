@@ -117,18 +117,22 @@ composite = 0.5 * (BCE / BCE_FLOOR) + 0.5 * (mean_pixel_ADE / ADE_FLOOR)
 
 | Metric | Value (M1) | Value (M2) | Value (M3) | Delta (Total) |
 |---|---|---|---|---|
-| **Composite score** | **0.8311** | **0.8231** | **0.8222** | **-0.0089** |
-| Intent term (BCE/floor) | 0.856 | 0.856 | 0.854 | -0.002 |
+| **Composite score** | **0.8311** | **0.8231** | **0.8190** | **-0.0121** |
+| Intent term (BCE/floor) | 0.856 | 0.856 | 0.848 | -0.008 |
 | Trajectory term (ADE/floor) | 0.806 | 0.790 | 0.790 | -0.016 |
 | Raw mean ADE | 40.2 px | 39.4 px | 39.4 px | -0.8 px |
 
 **M3 Changes Implemented:**
-- Expanded feature set (20 -> 25 features) including:
+- Expanded feature set (20 -> 31 features) including:
     - Short-term vs Long-term velocity comparison.
     - Explicit horizontal acceleration calculation.
     - Absolute speed magnitude features.
     - Binary "stopping" signal (speed below 1px/frame).
+    - Distance to frame center.
+    - Aspect ratio change (to detect body rotation).
+    - Full sparse metadata encoding (`location` and all `weather` states).
 - Retrained XGBoost with tuned hyperparameters (`lr=0.03`, `n_estimators=400`) optimized for BCE.
+- *Discarded:* Explicit class rebalancing (`scale_pos_weight`) and `CalibratedClassifierCV`. Both degraded the log-loss calibration, proving XGBoost's native probability estimates were already well-calibrated for the baseline distributions.
 
 ---
 

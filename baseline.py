@@ -67,13 +67,8 @@ def main() -> None:
 
     pos_ratio = float(y_train.mean())
 
-    print("\nTraining XGBClassifier (with class balancing)...")
+    print("\nTraining XGBClassifier (no class rebalancing — want calibrated probs)...")
     t0 = time.time()
-    # Calculate scale_pos_weight: sum(neg) / sum(pos)
-    neg_count = len(y_train) - y_train.sum()
-    pos_count = y_train.sum()
-    scale_weight = neg_count / pos_count
-
     clf = XGBClassifier(
         n_estimators=400,
         max_depth=5,

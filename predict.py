@@ -107,10 +107,20 @@ def _engineered_features(req: dict) -> np.ndarray:
         speed_last / fw,
         speed_mean / fw,
         is_stopping,
+        
+        # Structural features
+        abs((cx[-1] / fw) - 0.5), # Distance to frame center
+        (w[-1]/h[-1]) - (w[-8]/h[-8]) if len(w) >= 8 else 0.0, # Aspect ratio change (turning)
+        
+        # Metadata / Context
         1.0 if req.get("time_of_day") == "daytime" else 0.0,
         1.0 if req.get("time_of_day") == "nighttime" else 0.0,
         1.0 if req.get("weather") == "rain" else 0.0,
         1.0 if req.get("weather") == "snow" else 0.0,
+        1.0 if req.get("weather") == "clear" else 0.0,
+        1.0 if req.get("weather") in ["cloudy", "cloud"] else 0.0,
+        1.0 if req.get("location") == "street" else 0.0,
+        1.0 if req.get("location") == "plaza" else 0.0,
     ]
     return np.asarray(feats, dtype=np.float32)
 
